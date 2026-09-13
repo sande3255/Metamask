@@ -8,8 +8,8 @@ MetaMask itself has no trading API -- this script IS the "auto-buying bot,"
 signing and sending swap transactions on behalf of whatever wallet you
 point it at.
 
-Strategy (same logic as the stock version):
-  1. Watch a list of ERC-20 tokens on Base, priced in USDC.
+Strategy:
+  1. Watch a list of ERC-20 tokens on Base, each traded directly against USDC.
   2. Buy into the tokens with the strongest recent momentum.
   3. STOP LOSS: if any held token drops >= STOP_LOSS_PCT (default 1%) from
      its purchase price, sell it back to USDC immediately.
@@ -17,14 +17,34 @@ Strategy (same logic as the stock version):
      into whichever watchlist token currently has the best momentum that
      you don't already hold.
 
-CONTRACT ADDRESSES (Base mainnet, verified against Uniswap's and Circle's
-official docs as of this writing -- re-verify at docs.uniswap.org and
-developers.circle.com before running with real funds, since addresses
-occasionally change or get superseded by newer router versions):
+WATCHLIST -- all 9 tokens trade directly against USDC (no multi-hop routing
+needed). Each uses its OWN verified fee tier -- these are NOT interchangeable;
+using the wrong tier for a token means quoting/trading against an empty or
+nonexistent pool. Verified against GeckoTerminal/Basescan at time of writing;
+liquidity figures are a snapshot and will drift -- re-check before scaling
+up position size.
+
+  Symbol   Fee tier   Liquidity (approx)   Note
+  WETH     0.05%      $13M-118M            deepest pair on Base
+  cbBTC    0.05%      $7.5M-7.7M           Coinbase-wrapped BTC
+  AERO     0.05%      $190K-560K           Aerodrome, Base's native DEX token
+  ZORA     0.3%       $11.5M               Zora protocol token
+  MORPHO   1%         $310K                Morpho lending protocol
+  TOSHI    1%         $86K                 Base community/meme token
+  EURC     0.05%      $74K                 Circle's euro stablecoin (low volatility)
+  USDT     0.01%      $135K                Tether (low volatility, stablecoin pair)
+  NOCK     (check)    $1.4M                Newer project -- re-verify before
+                                            relying on it; supply/price data
+                                            across its L1 and Base bridge has
+                                            shown some reconciliation quirks
+
+CONTRACT ADDRESSES (Base mainnet, verified against Uniswap's/Circle's/each
+project's official docs and Basescan as of this writing -- re-verify before
+running with real funds, since addresses can change and many tokens have
+confusingly-similar imposter contracts):
   - Uniswap V3 SwapRouter02:  0x2626664c2603336E57B271c5C0b26F421741e481
   - Uniswap V3 QuoterV2:      0x3d4e44Eb1374240CE5F1B871ab261CD16335B76a
   - USDC (native, Circle):    0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913
-  - WETH:                     0x4200000000000000000000000000000000000006
 
 SECURITY
 --------
@@ -39,12 +59,15 @@ SETUP
 1. Install dependencies:
        pip install web3 --break-system-packages
 2. Set your wallet's private key as an environment variable:
-       export WALLET_PRIVATE_KEY="0xyourprivatekeyhere"
-3. (Optional but recommended) Get a free RPC endpoint from Alchemy or
-   Infura for Base mainnet -- the public RPC can be slow/rate-limited:
-       export BASE_RPC_URL="https://your-rpc-provider-url"
-   If not set, this defaults to the public Base RPC.
-4. Edit the CONFIG block below: watchlist tokens, stop-loss %, position size.
+       export WALLET_PRIVATE_KEY="0xe14f09f40481b72681147502ab519fe5ddd58c8356294602d80b6689ed940231"
+3. STRONGLY RECOMMENDED: get a free RPC endpoint from Alchemy or Infura for
+   Base mainnet. The public RPC (mainnet.base.org) rate-limits aggressively
+   with 8 tokens polling every 60s -- you will see "429 Too Many Requests"
+   errors on the public endpoint. A free Alchemy/Infura account fixes this:
+       export BASE_RPC_URL="https://base-mainnet.g.alchemy.com/v2/alch_5mFAPvOG9ylUE6NAzIGsG"
+   If not set, this defaults to the public Base RPC (works, but expect
+   occasional rate-limit warnings under this watchlist size).
+4. Edit the CONFIG block below: watchlist, stop-loss %, position size.
 5. Fund the wallet with USDC on Base (and a little ETH on Base for gas).
 6. Run it:
        python3 metamask_rotation_bot.py
@@ -68,24 +91,28 @@ DRY_RUN = True  # ALWAYS start here. Only set False when ready to send real tran
 
 BASE_RPC_URL = os.environ.get("BASE_RPC_URL", "https://mainnet.base.org")
 
-# Watchlist: token symbol -> ERC-20 contract address on Base.
-# Add/remove tokens here. All are priced and traded against USDC.
-WATCHLIST = {
-    "WETH": "0x4200000000000000000000000000000000000006",
-    "cbBTC": "0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf",
-    "AERO": "0x940181a94A35A4569E4529A3CDfB74e38FD98631",
-}
-
 USDC_ADDRESS = Web3.to_checksum_address("0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913")
 SWAP_ROUTER_ADDRESS = Web3.to_checksum_address("0x2626664c2603336E57B271c5C0b26F421741e481")
 QUOTER_ADDRESS = Web3.to_checksum_address("0x3d4e44Eb1374240CE5F1B871ab261CD16335B76a")
 
-POOL_FEE_TIER = 500         # 0.05% -- lowest-fee tier with real liquidity for WETH, cbBTC,
-                             # and AERO against USDC on Base (verified: each has $190K-$13M+
-                             # liquidity at this tier). If you add a token without a liquid
-                             # 0.05% pool, check its pools on app.uniswap.org/explore/pools/base
-                             # first -- trading against a thin pool causes bad slippage even
-                             # with a low fee.
+# Watchlist: symbol -> {address, fee}. `fee` is that token's OWN verified
+# Uniswap V3 fee tier against USDC (500 = 0.05%, 3000 = 0.3%, 10000 = 1%).
+# Do not change a token's fee without re-checking its actual liquid pool --
+# see the table in the module docstring above.
+WATCHLIST = {
+    "WETH":   {"address": "0x4200000000000000000000000000000000000006", "fee": 500},
+    "cbBTC":  {"address": "0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf", "fee": 500},
+    "AERO":   {"address": "0x940181a94A35A4569E4529A3CDfB74e38FD98631", "fee": 500},
+    "ZORA":   {"address": "0x1111111111166b7Fe7bd91427724B487980aFc69", "fee": 3000},
+    "MORPHO": {"address": "0xBAa5CC21fd487B8Fcc2F632f3F4E8D37262a0842", "fee": 10000},
+    "TOSHI":  {"address": "0xAC1Bd2486aAf3B5C0fc3Fd868558b082a531B2B4", "fee": 10000},
+    "EURC":   {"address": "0x60a3E35Cc302bFA44Cb288Bc5a4F316Fdb1adb42", "fee": 500},
+    "USDT":   {"address": "0xfde4C96c8593536E31F229EA8f37b2ADa2699bb2", "fee": 100},
+    # NOCK removed: its quote reverted in live testing -- the pool at fee=10000
+    # doesn't actually resolve on-chain. Re-verify its real pool/fee on
+    # GeckoTerminal before adding it back.
+}
+
 STOP_LOSS_PCT = 0.01        # 1% loss tolerance -- sell immediately if breached
 SLIPPAGE_PCT = 0.005        # 0.5% max slippage tolerance on swaps
 MOMENTUM_LOOKBACK_SAMPLES = 10  # how many price samples back to compare for momentum
@@ -173,15 +200,16 @@ class MetaMaskRotationBot:
         self.usdc = self.w3.eth.contract(address=USDC_ADDRESS, abi=ERC20_ABI)
         self.usdc_decimals = self.usdc.functions.decimals().call()
 
-        self.tokens = {
-            symbol: {
-                "address": Web3.to_checksum_address(addr),
-                "contract": self.w3.eth.contract(address=Web3.to_checksum_address(addr), abi=ERC20_ABI),
+        self.tokens = {}
+        for symbol, cfg in WATCHLIST.items():
+            addr = Web3.to_checksum_address(cfg["address"])
+            contract = self.w3.eth.contract(address=addr, abi=ERC20_ABI)
+            self.tokens[symbol] = {
+                "address": addr,
+                "fee": cfg["fee"],
+                "contract": contract,
+                "decimals": contract.functions.decimals().call(),
             }
-            for symbol, addr in WATCHLIST.items()
-        }
-        for symbol, t in self.tokens.items():
-            t["decimals"] = t["contract"].functions.decimals().call()
 
         self.state = self._load_state()
 
@@ -208,7 +236,7 @@ class MetaMaskRotationBot:
             "tokenIn": token["address"],
             "tokenOut": USDC_ADDRESS,
             "amountIn": amount_in,
-            "fee": POOL_FEE_TIER,
+            "fee": token["fee"],
             "sqrtPriceLimitX96": 0,
         }
         try:
@@ -269,7 +297,7 @@ class MetaMaskRotationBot:
         allowance = token_contract.functions.allowance(self.address, spender).call()
         if allowance < amount_raw:
             log.info(f"Approving {spender} to spend token...")
-            tx = token_contract.functions.approve(spender, amount_raw).build_transaction({})
+            tx = token_contract.functions.approve(spender, amount_raw).build_transaction({"from": self.address})
             if DRY_RUN:
                 log.info("[DRY RUN] Would send approval transaction.")
             else:
@@ -294,7 +322,7 @@ class MetaMaskRotationBot:
         params = {
             "tokenIn": USDC_ADDRESS,
             "tokenOut": token["address"],
-            "fee": POOL_FEE_TIER,
+            "fee": token["fee"],
             "recipient": self.address,
             "amountIn": amount_in_raw,
             "amountOutMinimum": min_out_raw,
@@ -303,7 +331,9 @@ class MetaMaskRotationBot:
         if DRY_RUN:
             log.info(f"[DRY RUN] Would swap {usdc_amount} USDC -> {symbol}")
         else:
-            tx = self.router.functions.exactInputSingle(params).build_transaction({"value": 0})
+            tx = self.router.functions.exactInputSingle(params).build_transaction(
+                {"from": self.address, "value": 0}
+            )
             self._send_tx(tx)
 
         self.state["positions"][symbol] = {"entry_price": price, "usdc_spent": usdc_amount}
@@ -330,7 +360,7 @@ class MetaMaskRotationBot:
         params = {
             "tokenIn": token["address"],
             "tokenOut": USDC_ADDRESS,
-            "fee": POOL_FEE_TIER,
+            "fee": token["fee"],
             "recipient": self.address,
             "amountIn": amount_in_raw,
             "amountOutMinimum": min_out_raw,
@@ -339,7 +369,9 @@ class MetaMaskRotationBot:
         if DRY_RUN:
             log.info(f"[DRY RUN] Would swap {balance} {symbol} -> USDC")
         else:
-            tx = self.router.functions.exactInputSingle(params).build_transaction({"value": 0})
+            tx = self.router.functions.exactInputSingle(params).build_transaction(
+                {"from": self.address, "value": 0}
+            )
             self._send_tx(tx)
 
         self.state["positions"].pop(symbol, None)
